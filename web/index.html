@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MediaConv 音视频转换</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icon-192.png">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;background:#f8fafc;color:#0f172a;font-size:15px;min-height:100vh}
+.header{height:56px;background:#fff;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;padding:0 24px;position:sticky;top:0;z-index:10}
+.header .logo{width:28px;height:28px;border-radius:6px;background:linear-gradient(135deg,#2563eb,#f97316);margin-right:10px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:14px}
+.header h1{font-size:16px;font-weight:600;color:#0f172a}
+.wrap{max-width:720px;margin:24px auto;padding:0 16px}
+.card{background:#fff;border-radius:12px;padding:32px;box-shadow:0 1px 3px rgba(0,0,0,.06),0 1px 2px rgba(0,0,0,.04);margin-bottom:16px}
+.drop{border:2px dashed #cbd5e1;border-radius:12px;padding:48px 20px;text-align:center;color:#64748b;cursor:pointer;transition:.2s;background:#f8fafc}
+.drop:hover,.drop.over{border-color:#2563eb;background:#eff6ff;color:#2563eb}
+.drop b{color:#2563eb}
+.fileinfo{font-size:13px;color:#475569;margin-top:12px}
+.row{display:flex;gap:12px;margin-top:20px;flex-wrap:wrap}
+.row>div{flex:1;min-width:140px}
+label{display:block;font-size:12px;color:#64748b;margin-bottom:6px;font-weight:500}
+select{width:100%;padding:9px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px;background:#fff;color:#0f172a}
+select:focus{outline:none;border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.1)}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+.chip{padding:6px 14px;border-radius:999px;border:1px solid #e2e8f0;background:#fff;color:#475569;font-size:13px;cursor:pointer;transition:.15s}
+.chip:hover{border-color:#f97316;color:#f97316}
+.chip.active{background:#2563eb;border-color:#2563eb;color:#fff}
+.btn-primary{background:#2563eb;color:#fff;border:0;border-radius:8px;padding:11px 24px;font-size:15px;font-weight:500;cursor:pointer;width:100%;margin-top:20px;transition:.15s}
+.btn-primary:hover:not(:disabled){background:#1d4ed8}
+.btn-primary:disabled{background:#93c5fd;cursor:not-allowed}
+.bar{height:6px;background:#e2e8f0;border-radius:3px;overflow:hidden;margin-top:16px}
+.bar>i{display:block;height:100%;background:linear-gradient(90deg,#2563eb,#f97316);width:0;transition:width .3s}
+.hint{font-size:13px;color:#64748b;margin-top:10px}
+.ok{color:#10b981;font-weight:500}
+.err{color:#ef4444}
+a.dl{display:inline-block;margin-top:10px;padding:9px 18px;background:#10b981;color:#fff;border-radius:8px;text-decoration:none;font-size:14px}
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="logo">M</div>
+  <h1>MediaConv 音视频转换</h1>
+</div>
+<div class="wrap">
+  <div class="card">
+    <div class="drop" id="drop">拖拽文件到这里，或 <b>点击选择</b><input type="file" id="file" accept=".mp3,.flac,.wav,.aac,.m4a,.ogg,.opus,.mp4,.mkv,.avi,.mov,.flv,.webm,.wmv,.mpg,.mpeg,.ncm,.kgm,.kgma,.qmc,.qmcflac,.qmc0,.mflac,.mgg,.kwm" hidden></div>
+    <div class="fileinfo" id="fileinfo">未选择文件</div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <div>
+        <label>输出格式</label>
+        <div class="chips" id="fmtchips"></div>
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <label>音质</label>
+        <select id="qual">
+          <option value="128k">128k</option>
+          <option value="192k" selected>192k</option>
+          <option value="320k">320k</option>
+        </select>
+      </div>
+    </div>
+    <button class="btn-primary" id="btn" disabled>开始转换</button>
+    <div class="bar"><i id="bar"></i></div>
+    <div class="hint" id="hint">等待上传文件</div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let fileId='', fileName='', curFmt='mp3';
+
+const fmts = ['mp3','aac','flac','wav','ogg','m4a','opus','mp4','webm','mkv'];
+const chipsBox = $('fmtchips');
+fmts.forEach(f=>{
+  const c=document.createElement('div');
+  c.className='chip'+(f==='mp3'?' active':'');
+  c.textContent=f.toUpperCase();
+  c.onclick=()=>{
+    chipsBox.querySelectorAll('.chip').forEach(x=>x.classList.remove('active'));
+    c.classList.add('active');
+    curFmt=f;
+  };
+  chipsBox.appendChild(c);
+});
+
+const drop = $('drop');
+drop.onclick = ()=>$('file').click();
+drop.ondragover = e=>{e.preventDefault();drop.classList.add('over')};
+drop.ondragleave = ()=>drop.classList.remove('over');
+drop.ondrop = e=>{e.preventDefault();drop.classList.remove('over');if(e.dataTransfer.files[0]) pick(e.dataTransfer.files[0])};
+$('file').onchange = e=>{if(e.target.files[0]) pick(e.target.files[0])};
+
+function pick(f){
+  fileName = f.name;
+  $('fileinfo').textContent = '已选: '+f.name+'  '+(f.size/1024/1024).toFixed(2)+' MB';
+  $('hint').textContent='上传中...';
+  const fd = new FormData();
+  fd.append('file', f);
+  fetch('/api/upload',{method:'POST',body:fd})
+    .then(r=>r.json())
+    .then(d=>{ fileId=d.file_id; $('btn').disabled=false; $('hint').textContent='就绪，可开始转换'; })
+    .catch(e=>{ $('hint').innerHTML='<span class="err">上传失败: '+e+'</span>'; });
+}
+
+$('btn').onclick = ()=>{
+  $('btn').disabled=true;
+  $('hint').textContent='提交任务...';
+  fetch('/api/convert',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({file_id:fileId, target_format:curFmt, quality:$('qual').value})
+  }).then(r=>r.json()).then(d=>{
+    if(d.job_id){ poll(d.job_id); }
+    else { $('hint').innerHTML='<span class="err">失败: '+(d.error||JSON.stringify(d))+'</span>'; $('btn').disabled=false; }
+  });
+};
+
+let timer=null;
+function poll(id){
+  timer = setInterval(()=>{
+    fetch('/api/progress/'+id).then(r=>r.json()).then(j=>{
+      if(j.percent >= 0){
+        $('bar').style.width = j.percent.toFixed(1)+'%';
+        $('hint').textContent = '转码中 '+j.percent.toFixed(1)+'%  ('+j.processed_sec.toFixed(1)+'s)';
+      }else{
+        $('hint').textContent='转码中...';
+      }
+      if(j.status==='done'){
+        clearInterval(timer);
+        $('bar').style.width='100%';
+        $('hint').innerHTML='<span class="ok">完成！</span> <a class="dl" href="/api/download/'+id+'">下载 '+fileName.replace(/\.\w+$/,'')+'.'+curFmt+'</a>';
+        $('btn').disabled=false;
+      }else if(j.status==='failed'){
+        clearInterval(timer);
+        $('hint').innerHTML='<span class="err">失败: '+(j.error||'')+'</span>';
+        $('btn').disabled=false;
+      }
+    });
+  }, 500);
+}
+</script>
+</body>
+</html>

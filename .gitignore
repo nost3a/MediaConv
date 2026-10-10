@@ -1,0 +1,47 @@
+# ---- 测试素材（大文件，不进仓库）----
+*.mp3
+*.mp4
+*.wav
+*.flac
+*.mkv
+*.m4a
+*.aac
+*.opus
+*.ogg
+*.webm
+*.avi
+*.mov
+test/sample.*
+!test/.gitkeep
+
+# ---- Windows 内嵌 ffmpeg（162M，不进仓库；用 scripts/fetch-ffmpeg.sh 下载）----
+internal/ffembed/ffmpeg.exe
+
+# ---- 编译产物 / 预编译二进制（走 GitHub Releases，不进 git）----
+bin/
+debroot/
+*.exe
+*.apk
+*.deb
+*.tar.gz
+*.zip
+*.syso
+ffmpeg
+ffmpeg.exe
+
+# ---- Go ----
+*.test
+*.out
+coverage.txt
+vendor/
+
+# ---- IDE / OS ----
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# ---- 本地构建缓存 ----
+dist/
+build/
+out/

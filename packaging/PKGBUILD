@@ -1,0 +1,15 @@
+# Maintainer: MediaConv Contributors
+pkgname=mediaconv
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Local media transcoder"
+arch=('x86_64')
+url="https://github.com/nost3a/MediaConv"
+license=('MIT')
+depends=('ffmpeg' 'libgl')
+
+package() {
+    install -Dm755 bin/mediaconv-linux-amd64 "$pkgdir/usr/bin/mediaconv"
+    install -Dm755 bin/mconv-linux-amd64 "$pkgdir/usr/bin/mconv"
+    install -Dm755 bin/MediaConv-Linux-amd64-cli "$pkgdir/usr/bin/mediaconv-cli"
+}
