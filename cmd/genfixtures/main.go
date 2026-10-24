@@ -36,7 +36,9 @@ var kwmRC4Key = []byte("0gojrpv30vn30cvp0jrp30vn3")
 
 func rc4XOR(key, data []byte) []byte {
 	s := make([]byte, 256)
-	for i := 0; i < 256; i++ { s[i] = byte(i) }
+	for i := 0; i < 256; i++ {
+		s[i] = byte(i)
+	}
 	j := 0
 	for i := 0; i < 256; i++ {
 		j = (j + int(s[i]) + int(key[i%len(key)])) & 0xff
@@ -67,7 +69,9 @@ func main() {
 	for i := 0; i < len(padded); i += aes.BlockSize {
 		block.Encrypt(enc[i:i+aes.BlockSize], padded[i:i+aes.BlockSize])
 	}
-	for i := range enc { enc[i] ^= 0x64 }
+	for i := range enc {
+		enc[i] ^= 0x64
+	}
 	ncmOut := append([]byte{}, ncmMagic...)
 	ncmOut = append(ncmOut, 1, 0)
 	buf := make([]byte, 4)

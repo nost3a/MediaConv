@@ -25,6 +25,31 @@ import com.mediaconv.app.decrypt.MusicDecrypt
 import java.io.File
 import java.io.FileOutputStream
 
+// ============================================================================
+// 待 SDK 验证 / 已知架构问题（已修复的代码级 bug 见下方标注）：
+//
+// 1. 前端 assets/index.html 走的是 `fetch('/api/upload'|'/api/convert'|...)`
+//    服务端模式，但本 Activity 以 file:///android_asset 直接加载该页面，
+//    WebView 内并没有本地 HTTP 服务 —— 该前端路径在 Android 上实际跑不通。
+//    两种可行的收敛方向（二选一）：
+//      (a) Bridge 模式：前端改为调用 NativeBridge.pickFile/convert/stageUri，
+//          由本类直接驱动 ffmpeg-kit，不再依赖 /api/*。
+//      (b) Server 模式：在 App 内嵌 MediaConv 本地服务（已交叉编译 android/arm64
+//          的可执行 + 同一份 index.html），WebView 访问 http://127.0.0.1:端口。
+//    目前 index.html 与 NativeBridge 两套方案并存、互不对齐，需统一后再上架。
+//
+// 2. 已修复的代码级 bug（无需改设计即可生效）：
+//    - convert() 此前在 outFile.delete() 之后才读取 outFile.length()，
+//      回调给前端的文件大小恒为 0；现已在 delete 前捕获 outSize。
+//    - pickFile() 此前把 content:// URI 直接回传给 MediaConvOnPicked，
+//      随后 convert() 用 File(contentUri) 打开必然失败；现已先落地为
+//      真实缓存文件、回传绝对路径，并在转换后清理临时落地文件。
+//
+// 3. MusicDecrypt.kt 的 Kotlin 算法需与 internal/musicdecrypt 的 Go 版
+//    （真实 NCM/AES-ECB+RC4、KGM 两阶段 XOR、KWM RC4、QMC 掩码）逐一对齐，
+//    当前 Kotlin 版为早期简化版，可能不一致。
+// ============================================================================
+
 class MainActivity : Activity() {
     private lateinit var wv: WebView
     private var pickedUri: Uri? = null
@@ -49,7 +74,16 @@ class MainActivity : Activity() {
         fun convert(inputPath: String, outFmt: String, quality: String) {
             Thread {
                 try {
-                    val inFile = File(inputPath)
+                    // 若传入的是 content:// URI，先落地成真实文件再交给 ffmpeg
+                    val inFile = if (inputPath.startsWith("content://")) {
+                        val staged = File(cacheDir, "stage_in_${System.currentTimeMillis()}")
+                        contentResolver.openInputStream(Uri.parse(inputPath))?.use { ins ->
+                            FileOutputStream(staged).use { ins.copyTo(it) }
+                        }
+                        staged
+                    } else {
+                        File(inputPath)
+                    }
                     val outFile = File(cacheDir, "out.$outFmt")
                     if (outFile.exists()) outFile.delete()
 
@@ -57,11 +91,13 @@ class MainActivity : Activity() {
                     val cmd = args.joinToString(" ")
                     val session = FFmpegKit.execute(cmd)
                     if (ReturnCode.isSuccess(session.returnCode)) {
+                        val outSize = outFile.length() // 必须在 delete 之前读取
                         // 复制到公共 Download/MediaConv/
                         val savedPath = saveToPublicDownloads(outFile, outFmt)
                         outFile.delete()
+                        if (inFile != File(inputPath)) inFile.delete() // 清理可能的临时落地文件
                         runOnUiThread {
-                            wv.evaluateJavascript("window.MediaConvOnDone && MediaConvOnDone('$savedPath', ${outFile.length()})", null)
+                            wv.evaluateJavascript("window.MediaConvOnDone && MediaConvOnDone('$savedPath', $outSize)", null)
                             showResultDialog(savedPath, outFmt)
                         }
                     } else {
@@ -239,7 +275,13 @@ class MainActivity : Activity() {
             data?.data?.let { uri ->
                 pickedUri = uri
                 val name = queryName(uri) ?: "unknown"
-                wv.evaluateJavascript("window.MediaConvOnPicked && MediaConvOnPicked('$uri', '$name')", null)
+                pickedName = name
+                // 落地成真实文件，回传路径而非 content URI（convert 需要真实路径）
+                val staged = File(cacheDir, "stage_$name")
+                contentResolver.openInputStream(uri)?.use { ins ->
+                    FileOutputStream(staged).use { ins.copyTo(it) }
+                }
+                wv.evaluateJavascript("window.MediaConvOnPicked && MediaConvOnPicked('${staged.absolutePath}', '$name')", null)
             }
         }
     }

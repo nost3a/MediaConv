@@ -1,28 +1,74 @@
 package musicdecrypt
 
-import "errors"
+import (
+	"errors"
+	"sort"
+)
 
-// qmc 旧版（qmc0/qmcflac）：直接 XOR 固定 key 流
-// 这里用一个 16 字节循环 key，加解密对称
-var qmcXorKey = []byte{0x5a, 0x8b, 0xa5, 0xd2, 0x33, 0x9c, 0x6e, 0xf1, 0x47, 0x2a, 0xb8, 0x09, 0xd5, 0x6c, 0x1e, 0x83}
+// qmcDefaultMaskMatrix 默认 44 字节掩码矩阵。
+// 用于离线可解的 QMC 变体（qmc0/qmc2/qmc3/qmcogg/qmcflac/bkcmp3/bkcflac/tkm）。
+// 来自 unlock-music 系的 QMCDefaultMaskMatrix。
+var qmcDefaultMaskMatrix = [44]byte{
+	0xde, 0x51, 0xfa, 0xc3, 0x4a, 0xd6, 0xca, 0x90,
+	0x7e, 0x67, 0x5e, 0xf7, 0xd5, 0x52, 0x84, 0xd8,
+	0x47, 0x95, 0xbb, 0xa1, 0xaa, 0xc6, 0x66, 0x23,
+	0x92, 0x62, 0xf3, 0x74, 0xa1, 0x9f, 0xf4, 0xa0,
+	0x1d, 0x3f, 0x5b, 0xf0, 0x13, 0x0e, 0x09, 0x3d,
+	0xf9, 0xbc, 0x00, 0x11,
+}
 
-// qmcMagic 文件头标记（测试样本用）
-var qmcMagic = []byte("QMC2")
+// qmcMatrix128 由默认 44 字节矩阵展开成 256 字节（每个索引 i 映射到 group，
+// group 由 (i*i+27) % 256 决定，同一 group 共用同一个掩码字节）。
+var qmcMatrix128 [256]byte
 
+func init() {
+	// 构建 realIdx -> []i 的映射
+	mapping := map[int][]int{}
+	for i := 0; i < 256; i++ {
+		r := (i*i + 27) % 256
+		mapping[r] = append(mapping[r], i)
+	}
+	// 按 realIdx 升序分配 group 序号（idx44）
+	keys := make([]int, 0, len(mapping))
+	for r := range mapping {
+		keys = append(keys, r)
+	}
+	sort.Ints(keys)
+	groupOf := make([]int, 256)
+	for idx44, r := range keys {
+		for _, i := range mapping[r] {
+			groupOf[i] = idx44
+		}
+	}
+	for i := 0; i < 256; i++ {
+		qmcMatrix128[i] = qmcDefaultMaskMatrix[groupOf[i]]
+	}
+}
+
+// decryptQMC 用默认掩码矩阵还原 QMC 音频。
+// 偏移规则（来自 unlock-music 的 Decrypt）：每 0x8000 字节插入一个额外掩码步进，
+// 掩码下标对 128 取模。
 func decryptQMC(raw []byte) ([]byte, string, error) {
-	if len(raw) < 8 {
-		return nil, "", errors.New("文件过短")
+	if len(raw) < 16 {
+		return nil, "", errors.New("文件过小，不是 QMC")
 	}
-	// 约定：前 4 字节是 "QMC2"，后接 4 字节音频长度，再后是加密音频
-	if string(raw[:4]) != string(qmcMagic) {
-		return nil, "", errors.New("magic 不匹配，不是 qmc 文件")
+	out := make([]byte, len(raw))
+	copy(out, raw)
+	index := -1
+	maskIdx := -1
+	for cur := 0; cur < len(out); cur++ {
+		index++
+		maskIdx++
+		if index == 0x8000 || (index > 0x8000 && (index+1)%0x8000 == 0) {
+			index++
+			maskIdx++
+		}
+		if maskIdx >= 128 {
+			maskIdx -= 128
+		}
+		out[cur] ^= qmcMatrix128[maskIdx]
 	}
-	// 真实 qmc 没有 magic，靠扩展名识别；这里为了自洽测试加了 magic
-	// 对真实文件我们跳过这个检查也能解（扩展名为 qmc* 就直接 XOR）
-	off := 8
-	audio := make([]byte, len(raw)-off)
-	for i := off; i < len(raw); i++ {
-		audio[i-off] = raw[i] ^ qmcXorKey[(i-off)%len(qmcXorKey)]
-	}
-	return audio, ".mp3", nil
+	// 默认矩阵不会在开头就产生合法音频头，交由 sniffAudioExt 判定；
+	// 若调用方发现结果非法（如 mflac/mgg），会在上层返回明确错误。
+	return out, "", nil
 }

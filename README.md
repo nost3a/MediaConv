@@ -8,16 +8,16 @@ A local media transcoder that runs entirely on your device — no cloud, no uplo
 ## 一键下载 / Quick Download
 
 ```bash
-# Windows 10/11 64-bit
-curl -L -o MediaConv-Win64.exe https://github.com/nost3a/MediaConv/releases/latest/download/MediaConv-Win64.exe
+# Windows 10/11 64-bit（内嵌 ffmpeg，开箱即用）
+curl -L -o mediaconv.exe https://github.com/nost3a/MediaConv/releases/latest/download/mediaconv-windows-amd64.exe
 
 # Linux amd64 (command line)
-curl -L -o mediaconv https://github.com/nost3a/MediaConv/releases/latest/download/MediaConv-Linux-amd64-cli
+curl -L -o mediaconv https://github.com/nost3a/MediaConv/releases/latest/download/mediaconv-linux-amd64
 chmod +x mediaconv && ./mediaconv
 
-# Debian / Ubuntu desktop
-curl -L -o mediaconv.deb https://github.com/nost3a/MediaConv/releases/latest/download/MediaConv-Linux-amd64.deb
-sudo dpkg -i mediaconv.deb
+# Linux 桌面 GUI 版
+curl -L -o mediaconv-gui https://github.com/nost3a/MediaConv/releases/latest/download/mediaconv-linux-amd64-gui
+chmod +x mediaconv-gui && ./mediaconv-gui
 
 # Android
 # 浏览器打开 https://github.com/nost3a/MediaConv/releases/latest 下载 APK
@@ -92,65 +92,58 @@ chmod +x mediaconv && ./mediaconv
 
 ```
 用法 / Usage:
-  mediaconv start                    启动 GUI 或本地 Web 服务
-  mediaconv convert -i IN -o OUT     命令行直接转码
-  mediaconv list-formats             列出支持格式
-  mediaconv version                  打印版本
+  mediaconv start [--host 127.0.0.1] [--port 8090]   启动本地 Web 服务（无桌面首选）
+  mediaconv up [-f 格式] [-q 音质]                     TUI 选文件→转码→TUI 选输出目录
+  mediaconv convert -i IN [-f 格式] [-q 音质] [-o OUT]  命令行单次转码
+  mediaconv batch -d 目录 -f 格式 [-q 音质] [--recursive] 批量转码目录
+  mediaconv info <文件>                                查看媒体信息（时长/编码/分辨率）
+  mediaconv list                                       列出支持的格式与音质
+  mediaconv decrypt <文件.ncm/kgm/qmc/kwm>             仅还原私有音乐格式（不重编码）
+  mediaconv clean                                      清理临时工作目录
+  mediaconv ffmpeg                                     查看 ffmpeg/ffprobe 状态与安装提示
+  mediaconv gui                                        启动原生图形界面（需 -tags gui 构建）
+  mediaconv repl                                       进入交互式命令行
+  mediaconv version                                    打印版本
 ```
+
+> **Linux / Windows 共用同一套命令库**（源码在 `internal/cli`）。
+> 行为完全一致，只有产物形态不同：Windows 版把 ffmpeg 内嵌进 exe，开箱即用；
+> Linux 版使用系统 PATH 里的 ffmpeg / ffprobe。
+> The same command library is shared by both Linux and Windows CLI builds.
 
 ---
 
 ## 交互式命令行 / Interactive CLI
 
-`mconv` 是一个带菜单的交互版，适合不想记命令的用户。
-`mconv` is an interactive menu-driven version for users who don't want to memorize flags.
+无参运行 `mediaconv` 会打印帮助。想进交互循环用 `repl`（别名 `shell` / `sh`）：
+Run `mediaconv repl` to enter an interactive loop.
 
 ```
-$ ./mconv-linux-amd64
-MediaConv  v1.0.0
-本地音视频转换工具 / Local media transcoder
-
-输入 help 查看命令 / Type help for commands.
-
-mconv> up song.mp4
-已加载 song.mp4
-Loaded song.mp4
-
-可转换格式 / Available formats:
-  "1"  mp4
-  "2"  mkv
-  "3"  avi
-  ...
-
-请输入编号 / Enter number: 1
-转换为 mp4 / Converting to mp4
-请输入保存路径 / Enter save path:
-> /tmp/output.mp4
-转换成功 / Conversion success!
-已保存到 /tmp/output.mp4
-
-mconv> up song.ncm
-已加载 song.ncm
-Loaded song.ncm
-...（自动先还原再转 / auto-decrypts first）
-
-mconv> help
-mconv> exit
+$ ./mediaconv repl
+MediaConv 1.2.0 交互模式（输入 help 查看命令，exit 退出）
+mediaconv> help
+mediaconv> convert -i song.wav -f mp3 -o song.mp3
+mediaconv> batch -d ./videos -f mp4 -q 192k --recursive
+mediaconv> exit
 ```
 
-命令 / Commands:
+`up` 命令（别名 `upload`）专为非桌面 / 无文件管理器的环境设计，内置 **bubbletea TUI 文件选择器**：
+The `up` command embeds a bubbletea TUI file picker:
 
-| 命令 | 作用 |
-|---|---|
-| `up <文件>` | 加载文件并列出格式菜单 / Load file and show format menu |
-| `dl` | 清理临时文件 / Clean temp files |
-| `help` | 显示帮助 / Show help |
-| `exit` | 退出 / Quit |
+1. 启动后弹出 TUI 文件管理器，让你浏览并**选择原始文件**；
+2. 选好格式/音质后开始转码；
+3. 转码完成再弹出 TUI，让你**选择输出目录**并命名。
 
-Windows 版 `mconv-windows-amd64.exe` 已内置 ffmpeg，双击即用。
-The Windows `mconv-windows-amd64.exe` ships with ffmpeg bundled, double-click to run.
+```
+$ ./mediaconv up -f mp3 -q 320k
+[ TUI 文件管理器：选择要转换的原文件 ]
+[ 转码中 ... 100% ]
+[ TUI 文件管理器：选择输出保存位置 ]
+已保存到 /path/to/out.mp3
+```
 
----
+Windows 版 `mediaconv-windows-amd64.exe` 已内置 ffmpeg，双击即用。
+The Windows `mediaconv-windows-amd64.exe` ships with ffmpeg bundled, double-click to run.
 
 ---
 
@@ -168,6 +161,17 @@ Recovers these container formats back to plain MP3 / FLAC:
 
 直接当普通文件上传或作为 `-i` 输入即可，工具会自动先还原再转。
 Just pass them in like any other file — recovery happens automatically.
+
+> 还原算法按各平台真实封装实现（仅本地、不联网）：
+> Recovery follows each platform's real container spec, fully offline:
+> - **NCM**：AES-128-ECB 解密钥 → RC4 解密音频流
+> - **KGM / KGMA**：固定密钥 + 两段式 XOR 掩码
+> - **QMC / QMCFLAC / MFLAC / MGG**：位置掩码矩阵异或
+> - **KWM**：RC4 流解密
+>
+> 解密相关代码在 `internal/musicdecrypt/`（Go，含 round-trip 测试）；
+> Android 端另有一份 Kotlin 移植在 `android/app/.../decrypt/MusicDecrypt.kt`，
+> 上架前需与该 Go 版逐一对齐（见该文件注释）。
 
 ---
 
@@ -197,16 +201,30 @@ The server binds to loopback only by design. Don't expose it to the public inter
 Requires Go 1.23+. Linux/macOS use system ffmpeg; the Windows build embeds ffmpeg.
 
 ```bash
+# Linux 纯 CLI（无桌面依赖，CGO 关闭）
+bash scripts/build-cli.sh          # → bin/mediaconv-linux-amd64
+
+# Windows CLI 交叉编译（自动下载内嵌 ffmpeg.exe，162M 不进 git）
+bash scripts/build-windows-cli.sh  # → bin/mediaconv-windows-amd64.exe
+
+# 桌面 GUI 版（可选）
+bash scripts/build-linux-webview.sh   # Linux + webkit2gtk-4.1
+bash scripts/build-windows.sh         # Windows GUI（需 mingw-w64）
+```
+
+也可以手动编译 / Or build by hand:
+
+```bash
 # Windows 交叉编译前，先拉一次内嵌用的 ffmpeg.exe（162M，不进 git）：
 bash scripts/fetch-ffmpeg.sh
 
 # 普通编译 / Normal build
-go build -o mediaconv .
+CGO_ENABLED=0 go build -o mediaconv .
 ./mediaconv -h
 ```
 
-Linux 桌面版需要 OpenGL 开发头文件（`libgl-dev`）。
-The Linux desktop build needs OpenGL dev headers (`libgl-dev`).
+Linux 桌面版需要 OpenGL / webkit 开发头文件（`libgl-dev` / `libwebkit2gtk-4.1-dev`）。
+The Linux desktop build needs OpenGL / webkit dev headers.
 
 > 仓库里不含 `bin/`（预编译二进制）、`internal/ffembed/ffmpeg.exe`（162M）、`test/*.mp3/mp4`（测试素材），
 > 这些都通过 `.gitignore` 排除，二进制走 GitHub Releases 分发。

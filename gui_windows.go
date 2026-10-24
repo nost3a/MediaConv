@@ -5,16 +5,13 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
-	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/lxn/walk"
 	. "github.com/lxn/walk/declarative"
+	"github.com/nost3a/MediaConv/internal/convert"
 	"github.com/nost3a/MediaConv/internal/ffwrap"
-	"github.com/nost3a/MediaConv/internal/musicdecrypt"
-	"github.com/nost3a/MediaConv/internal/preset"
 )
 
 var lastOutPath string
@@ -76,26 +73,6 @@ func startGUI() {
 }
 
 func doConvertWalk(inPath, outFmt, quality string, bar *walk.ProgressBar, status *walk.Label) error {
-	if musicdecrypt.IsPrivateExt(inPath) {
-		dec, _, err := musicdecrypt.Decrypt(inPath)
-		if err != nil {
-			return err
-		}
-		inPath = dec
-	}
-	inExt := strings.TrimPrefix(filepath.Ext(inPath), ".")
-	p, ok := preset.Find(inExt, outFmt, quality)
-	if !ok {
-		return fmt.Errorf("不支持: %s -> %s", inExt, outFmt)
-	}
-	dir := filepath.Dir(inPath)
-	base := strings.TrimSuffix(filepath.Base(inPath), filepath.Ext(inPath))
-	outPath := filepath.Join(dir, base+"."+outFmt)
-	lastOutPath = outPath
-
-	args := p.BuildArgs(quality, outPath)
-	args = append([]string{"-i", inPath}, args...)
-
 	ffBin, err := ffwrap.FindFFmpeg()
 	if err != nil {
 		return err
@@ -104,19 +81,30 @@ func doConvertWalk(inPath, outFmt, quality string, bar *walk.ProgressBar, status
 	if err != nil {
 		return err
 	}
-	dur := ffwrap.ProbeDuration(probeBin, inPath)
-	log.Printf("ffmpeg %v", args)
 
-	return ffwrap.Run(context.Background(), ffBin, args, func(sec float64) {
-		if dur > 0 {
-			pct := int(sec / dur * 100)
-			if pct > 100 {
-				pct = 100
+	dir := filepath.Dir(inPath)
+	base := strings.TrimSuffix(filepath.Base(inPath), filepath.Ext(inPath))
+	outPath := filepath.Join(dir, base+"."+outFmt)
+	lastOutPath = outPath
+
+	opts := convert.Options{
+		InPath:     inPath,
+		OutFmt:     outFmt,
+		OutPath:    outPath,
+		Quality:    quality,
+		FFmpegBin:  ffBin,
+		FFprobeBin: probeBin,
+		OnProgress: func(sec, total float64) {
+			if total > 0 {
+				pct := int(sec / total * 100)
+				if pct > 100 {
+					pct = 100
+				}
+				bar.SetValue(pct)
+				status.SetText(fmt.Sprintf("转码中 %d%%", pct))
 			}
-			bar.SetValue(pct)
-			status.SetText(fmt.Sprintf("转码中 %d%%", pct))
-		}
-	})
+		},
+	}
+	_, err = convert.Convert(context.Background(), opts)
+	return err
 }
-
-var _ = os.Args

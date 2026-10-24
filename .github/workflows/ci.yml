@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.0'
+          cache: true
+
+      - name: Vet (CLI / no-GUI)
+        run: CGO_ENABLED=0 go vet ./...
+
+      - name: Test
+        run: CGO_ENABLED=0 go test ./internal/... .
+
+      - name: Build Linux CLI
+        run: bash scripts/build-cli.sh
+
+      - name: Build Windows CLI
+        run: bash scripts/build-windows-cli.sh
+
+  build-gui-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.0'
+          cache: true
+      - name: Install webkit2gtk-4.1 dev
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config
+      - name: Build Linux GUI
+        run: bash scripts/build-linux-webview.sh

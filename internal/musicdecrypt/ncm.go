@@ -1,108 +1,149 @@
 package musicdecrypt
 
 import (
-	"crypto/aes"
+	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
+	"fmt"
 )
 
-var ncmMagic = []byte("CTENFDAM")
+const (
+	ncmMasterKey   = "hzHRAmso5kInbaxW"
+	ncmMetadataKey = "#14ljk_!\\]&0U<'("
+	ncmFileHeader  = "CTENFDAM"
+	ncmMetaHeader  = "163 key(Don't modify):"
+	ncmMetaHeader2 = "music:"
+	ncmMetaXor     = 0x63
+)
 
-// ncmAESKey 提取 RC4 key 用的 AES-128 key（16 字节）
-var ncmAESKey = []byte("hzHRz0r4z5!Z3$eX")
+// ncmMetadata NCM 元数据里我们关心的字段（其余忽略）
+type ncmMetadata struct {
+	MusicName string `json:"musicName"`
+	Format    string `json:"format"`
+	Album     string `json:"album"`
+}
 
+// decryptNCM 还原网易云 ncm。算法：
+//  1. 读 RC4 密钥（XOR 0x64 → AES-128-ECB(masterKey) 解密 → 去 PKCS7 → 跳过 17 字节）
+//  2. 用密钥做 RC4 式 KSA 生成 keyBox
+//  3. 读并校验元数据（XOR 0x63 → Base64 解码 → AES-128-ECB(metadataKey) 解密 → JSON）
+//  4. 跳过 crc32 + dummy + 专辑图，剩余数据用 keyBox 逐字节还原
 func decryptNCM(raw []byte) ([]byte, string, error) {
-	if len(raw) < 16 {
-		return nil, "", errors.New("文件过短")
+	if len(raw) < 0x80 {
+		return nil, "", errors.New("文件过小，不是 NCM")
 	}
-	if string(raw[:8]) != string(ncmMagic) {
-		return nil, "", errors.New("magic 不匹配，不是 ncm 文件")
+	if string(raw[:8]) != ncmFileHeader {
+		return nil, "", errors.New("文件头不是 CTENFDAM，不是 NCM")
 	}
-	// 布局: 8 magic | 2 skip | 4 LE keyLen | keyBytes | ... | audio
-	off := 10
-	keyLen := int(binary.LittleEndian.Uint32(raw[off : off+4]))
-	off += 4
-	if off+keyLen > len(raw) {
-		return nil, "", errors.New("key 长度越界")
-	}
-	encKey := raw[off : off+keyLen]
-	off += keyLen
+	pos := 8
+	pos += 2 // 2 字节填充
 
-	// 1. 每个字节 XOR 0x64
-	xored := make([]byte, len(encKey))
-	for i, b := range encKey {
-		xored[i] = b ^ 0x64
+	keyLen := int(binary.LittleEndian.Uint32(raw[pos : pos+4]))
+	pos += 4
+	if keyLen <= 17 || pos+keyLen > len(raw) {
+		return nil, "", fmt.Errorf("密钥长度异常: %d", keyLen)
 	}
-	// 2. AES-128-ECB 解密
-	rc4Key, err := aesECBDecrypt(ncmAESKey, xored)
+	key := make([]byte, keyLen)
+	copy(key, raw[pos:pos+keyLen])
+	pos += keyLen
+	for i := range key {
+		key[i] ^= 0x64
+	}
+	dec, err := aesECBDecrypt([]byte(ncmMasterKey), key)
 	if err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("密钥解密失败: %w", err)
 	}
-	// 去掉前面固定的 "neteasecloudmusic" (17 字节)
-	if len(rc4Key) > 17 {
-		rc4Key = rc4Key[17:]
+	dec = pkcs7Unpad(dec)
+	if len(dec) <= 17 {
+		return nil, "", errors.New("密钥解析失败")
+	}
+	key = dec[17:]
+
+	// 构建 keyBox（RC4 式 KSA）
+	var keyBox [256]byte
+	for i := range keyBox {
+		keyBox[i] = byte(i)
+	}
+	var prev byte
+	offset := 0
+	for i := 0; i < 256; i++ {
+		v := keyBox[i]
+		c := (int(v) + int(prev) + int(key[offset])) & 0xff
+		offset = (offset + 1) % len(key)
+		keyBox[i] = keyBox[c]
+		keyBox[c] = v
+		prev = byte(c)
 	}
 
-	// 后面是 metadata(4+M) + crc(4) + gap(5) + albumImgLen(4) + img + audio
-	// 为了简化，我们从后往前找音频起点：直接跳到最后一段做 RC4 keystream
-	// 真实 ncm 音频在 album image 之后。这里我们采用一个约定：
-	// 在测试样本里，key 段之后直接就是 audio（跳过 metadata/crc/gap/img 的固定空字段）。
-	// 真实文件里这些字段存在，我们扫描一下：跳过 4(META_LEN)+META+4(CRC)+5(GAP)+4(IMG_LEN)+IMG
-	// 但 META/IMG 长度不定，简单做法：用 RC4 流密钥直接对 off 之后所有字节解密，
-	// 解密出来按 sniffAudioExt 判断；多余头部会被 mp3/flac 解析器忽略。
-
-	audio := rc4StreamXOR(rc4Key, raw[off:])
-	return audio, ".mp3", nil
-}
-
-// aesECBDecrypt 极简 ECB 解密（不做 padding 校验，裁掉全 0 填充即可）
-func aesECBDecrypt(key, data []byte) ([]byte, error) {
-	block, err := aes.NewCipher(key)
+	// 元数据
+	if pos+4 > len(raw) {
+		return nil, "", errors.New("元数据长度读取越界")
+	}
+	metaLen := int(binary.LittleEndian.Uint32(raw[pos : pos+4]))
+	pos += 4
+	if metaLen < len(ncmMetaHeader) || pos+metaLen > len(raw) {
+		return nil, "", fmt.Errorf("元数据长度异常: %d", metaLen)
+	}
+	metaLen -= len(ncmMetaHeader)
+	mhdr := raw[pos : pos+len(ncmMetaHeader)]
+	pos += len(ncmMetaHeader)
+	for i := range mhdr {
+		mhdr[i] ^= ncmMetaXor
+	}
+	if string(mhdr) != ncmMetaHeader {
+		return nil, "", errors.New("元数据头不匹配")
+	}
+	metaPart := raw[pos : pos+metaLen]
+	pos += metaLen
+	for i := range metaPart {
+		metaPart[i] ^= ncmMetaXor
+	}
+	decoded, err := base64.StdEncoding.DecodeString(string(metaPart))
 	if err != nil {
-		return nil, err
+		return nil, "", fmt.Errorf("元数据 base64 失败: %w", err)
 	}
-	if len(data)%aes.BlockSize != 0 {
-		// 补齐
-		pad := aes.BlockSize - len(data)%aes.BlockSize
-		tmp := make([]byte, len(data)+pad)
-		copy(tmp, data)
-		data = tmp
+	clear, err := aesECBDecrypt([]byte(ncmMetadataKey), decoded)
+	if err != nil {
+		return nil, "", fmt.Errorf("元数据解密失败: %w", err)
 	}
-	out := make([]byte, len(data))
-	for i := 0; i < len(data); i += aes.BlockSize {
-		block.Decrypt(out[i:i+aes.BlockSize], data[i:i+aes.BlockSize])
+	clear = pkcs7Unpad(clear)
+	if len(clear) < len(ncmMetaHeader2) || string(clear[:len(ncmMetaHeader2)]) != ncmMetaHeader2 {
+		return nil, "", errors.New("元数据内容异常")
 	}
-	// 去尾部 0 填充
-	for len(out) > 0 && out[len(out)-1] == 0 {
-		out = out[:len(out)-1]
+	var meta ncmMetadata
+	if err := json.Unmarshal(clear[len(ncmMetaHeader2):], &meta); err != nil {
+		// 元数据解析失败不影响音频还原，仅拿不到格式提示
+		meta = ncmMetadata{}
 	}
-	return out, nil
-}
 
-// rc4StreamXOR 用 RC4 风格 S-box 流密钥异或
-// 注意：这是简化版 keystream，加解密对称（XOR 对称）
-func rc4StreamXOR(key, data []byte) []byte {
-	if len(key) == 0 {
-		return data
+	// 跳过 crc32(4) + dummy(5) + 专辑图(imageSize)
+	if pos+4+5 > len(raw) {
+		return nil, "", errors.New("尾部校验读取越界")
 	}
-	s := make([]byte, 256)
-	for i := 0; i < 256; i++ {
-		s[i] = byte(i)
+	pos += 4 + 5
+	imageSize := int(binary.LittleEndian.Uint32(raw[pos : pos+4]))
+	pos += 4
+	if imageSize < 0 || pos+imageSize > len(raw) {
+		return nil, "", fmt.Errorf("专辑图长度异常: %d", imageSize)
 	}
-	j := 0
-	for i := 0; i < 256; i++ {
-		j = (j + int(s[i]) + int(key[i%len(key)])) & 0xff
-		s[i], s[j] = s[j], s[i]
+	pos += imageSize
+
+	if pos >= len(raw) {
+		return nil, "", errors.New("无可还原音频数据")
 	}
-	// keystream
-	out := make([]byte, len(data))
-	si, sj := 0, 0
-	for i := 0; i < len(data); i++ {
-		si = (si + 1) & 0xff
-		sj = (sj + int(s[si])) & 0xff
-		s[si], s[sj] = s[sj], s[si]
-		k := s[(int(s[si])+int(s[sj]))&0xff]
-		out[i] = data[i] ^ k
+	audio := raw[pos:]
+
+	// RC4 改流还原
+	for i := 1; i <= len(audio); i++ {
+		j := i & 0xff
+		idx := (int(keyBox[j]) + int(keyBox[(int(keyBox[j])+j)&0xff])) & 0xff
+		audio[i-1] ^= keyBox[idx]
 	}
-	return out
+
+	outExt := ""
+	if meta.Format != "" {
+		outExt = "." + meta.Format
+	}
+	return audio, outExt, nil
 }

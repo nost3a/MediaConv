@@ -11,8 +11,8 @@ import (
 // TestRealFixtures 依赖 test/ 目录下的 sample.mp3 及其派生加密样本
 // 这些 fixture 不进 git 仓库（体积大、属测试素材）；本地要跑时：
 //
-//	1. 往 test/sample.mp3 放任意一段短 mp3
-//	2. go run ./cmd/genfixtures   # 生成 sample.ncm/kgm/qmc/kwm
+//  1. 往 test/sample.mp3 放任意一段短 mp3
+//  2. go run ./cmd/genfixtures   # 生成 sample.ncm/kgm/qmc/kwm
 //
 // 仓库里没有 fixture 时本测试自动 skip，不影响 CI。
 func TestRealFixtures(t *testing.T) {

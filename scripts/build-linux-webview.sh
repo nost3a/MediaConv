@@ -4,16 +4,19 @@
 set -e
 cd "$(dirname "$0")/.."
 
+VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
+LDFLAGS="-s -w -X main.version=${VERSION}"
+
 echo "==> 检查 webkit2gtk-4.1..."
 if ! pkg-config --exists webkit2gtk-4.1; then
     echo "[!] 缺 webkit2gtk-4.1，先装: sudo apt install libwebkit2gtk-4.1-dev"
     exit 1
 fi
 
-echo "==> 编译 linux/amd64 GUI 版"
+echo "==> 编译 linux/amd64 GUI 版 (version=${VERSION})"
 CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
     go build -trimpath \
-    -ldflags "-s -w" \
+    -ldflags "${LDFLAGS}" \
     -o bin/mediaconv-linux-amd64-gui .
 
 echo "==> 完成: bin/mediaconv-linux-amd64-gui"

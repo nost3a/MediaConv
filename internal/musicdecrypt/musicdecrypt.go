@@ -1,8 +1,18 @@
-// Package musicdecrypt 把国内音乐平台私有格式还原成裸音频（mp3/flac）。
-// 仅做个人备份用途，算法均为公开资料里的轻量异或/固定密钥变换。
+// Package musicdecrypt 把国内音乐平台私有格式还原成裸音频（mp3/flac/ogg/m4a）。
+//
+// 算法均来自公开逆向资料（keuin/ncm、unlock-music 系与 ilyhacker/kgm-decrypt），
+// 仅用于个人备份，请勿用于其他用途。
+//
+// 注意：本包只还原离线可解的变体——
+//   - ncm：完整支持（AES-128-ECB 还原 RC4 密钥 + RC4 改流向）
+//   - kgm / kgma / vpr：完整支持（17 字节密钥 + 两阶段 XOR + 掩码表）
+//   - kwm：完整支持（8 字节 fileKey → 32 字节掩码）
+//   - qmc0/qmc2/qmc3/qmcogg/qmcflac/bkcmp3/bkcflac/tkm：默认掩码矩阵离线可解
+//   - mflac / mgg：需要文件内嵌密钥（keybox），离线无法还原，会返回明确错误
 package musicdecrypt
 
 import (
+	"crypto/aes"
 	"errors"
 	"fmt"
 	"os"
@@ -14,15 +24,21 @@ var ErrUnsupported = errors.New("不支持的私有格式")
 
 // 支持的扩展名集合
 var privateExts = map[string]bool{
-	".ncm":   true,
-	".kgm":   true,
-	".kgma":  true,
-	".qmc":   true,
+	".ncm":     true,
+	".kgm":     true,
+	".kgma":    true,
+	".qmc":     true,
 	".qmcflac": true,
-	".mflac": true,
-	".qmc0":  true,
-	".mgg":   true,
-	".kwm":   true,
+	".qmc0":    true,
+	".qmc2":    true,
+	".qmc3":    true,
+	".qmcogg":  true,
+	".bkcmp3":  true,
+	".bkcflac": true,
+	".tkm":     true,
+	".mflac":   true, // 需内嵌密钥，离线无法还原
+	".mgg":     true, // 需内嵌密钥，离线无法还原
+	".kwm":     true,
 }
 
 // IsPrivateExt 判断这个后缀是不是私有格式
@@ -30,8 +46,9 @@ func IsPrivateExt(name string) bool {
 	return privateExts[strings.ToLower(filepath.Ext(name))]
 }
 
-// Decrypt 读 inPath，还原成裸音频写到临时目录，返回 (outPath, outExt)。
-// outExt 是 .mp3 / .flac / .ogg 等。
+// Decrypt 读 inPath，还原成裸音频并写到系统临时目录，
+// 返回 (outPath, outExt)。outPath 由调用方负责清理（通常 defer os.Remove）。
+// outExt 形如 .mp3 / .flac / .ogg / .m4a。
 func Decrypt(inPath string) (string, string, error) {
 	ext := strings.ToLower(filepath.Ext(inPath))
 	raw, err := os.ReadFile(inPath)
@@ -40,24 +57,22 @@ func Decrypt(inPath string) (string, string, error) {
 	}
 
 	var (
-		audio   []byte
-		outExt  string
-		format  string
+		audio  []byte
+		outExt string
+		format string
 	)
 	switch ext {
 	case ".ncm":
 		audio, outExt, err = decryptNCM(raw)
 		format = "ncm"
-	case ".kgm", ".kgma":
+	case ".kgm", ".kgma", ".vpr":
 		audio, outExt, err = decryptKGM(raw)
 		format = "kgm"
-	case ".qmc", ".qmcflac", ".qmc0", ".mflac":
+	case ".qmc", ".qmcflac", ".qmc0", ".qmc2", ".qmc3", ".qmcogg", ".bkcmp3", ".bkcflac", ".tkm":
 		audio, outExt, err = decryptQMC(raw)
 		format = "qmc"
-	case ".mgg":
-		// mgg 沿用 qmc 系列思路
-		audio, outExt, err = decryptQMC(raw)
-		format = "mgg"
+	case ".mflac", ".mgg":
+		return "", "", fmt.Errorf("[%s] 该变体需文件内嵌密钥(keybox)，离线无法还原，请用源平台导出", format)
 	case ".kwm":
 		audio, outExt, err = decryptKWM(raw)
 		format = "kwm"
@@ -68,19 +83,26 @@ func Decrypt(inPath string) (string, string, error) {
 		return "", "", fmt.Errorf("[%s] 还原失败: %w", format, err)
 	}
 	if len(audio) < 128 {
-		return "", "", errors.New("解密后文件过小，疑似损坏")
+		return "", "", errors.New("解密后文件过小，疑似损坏或格式不匹配")
 	}
 
-	// 按音频头判断真实容器
+	// 按音频头判断真实容器（覆盖传入的默认值）
 	outExt = sniffAudioExt(audio, outExt)
 
-	dir := filepath.Dir(inPath)
-	base := strings.TrimSuffix(filepath.Base(inPath), filepath.Ext(inPath))
-	outPath := filepath.Join(dir, base+".decrypted"+outExt)
-	if err := os.WriteFile(outPath, audio, 0644); err != nil {
+	f, err := os.CreateTemp("", "mediaconv-dec-*"+outExt)
+	if err != nil {
 		return "", "", err
 	}
-	return outPath, outExt, nil
+	if _, err := f.Write(audio); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return "", "", err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(f.Name())
+		return "", "", err
+	}
+	return f.Name(), outExt, nil
 }
 
 // sniffAudioExt 按音频头猜容器，回退到传入的默认值
@@ -103,4 +125,33 @@ func sniffAudioExt(b []byte, def string) string {
 		return ".wav"
 	}
 	return def
+}
+
+// aesECBDecrypt AES-128/256 ECB 解密（密钥长度决定）。输入必须按块对齐。
+func aesECBDecrypt(key, src []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	bs := block.BlockSize()
+	if len(src)%bs != 0 {
+		return nil, fmt.Errorf("密文长度 %d 不是块大小 %d 的整数倍", len(src), bs)
+	}
+	out := make([]byte, len(src))
+	for i := 0; i < len(src); i += bs {
+		block.Decrypt(out[i:i+bs], src[i:i+bs])
+	}
+	return out, nil
+}
+
+// pkcs7Unpad 去掉 PKCS7 填充
+func pkcs7Unpad(b []byte) []byte {
+	if len(b) == 0 {
+		return b
+	}
+	n := int(b[len(b)-1])
+	if n == 0 || n > len(b) {
+		return b
+	}
+	return b[:len(b)-n]
 }

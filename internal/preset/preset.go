@@ -2,6 +2,8 @@
 // Built-in transcoder presets
 package preset
 
+import "sort"
+
 // Preset 一条转码预设：输入后缀 + 目标格式 + 音质 -> ffmpeg 参数
 type Preset struct {
 	Category    string
@@ -54,7 +56,6 @@ var audioOuts = []audioOut{
 	{"aiff", "pcm_s16le", []string{"-f", "aiff"}, false},
 	{"amr", "amr_nb", []string{"-ar", "8000", "-ac", "1"}, false},
 	{"mka", "copy", nil, false},
-	{"mpc", "libmpc", nil, true},
 	{"tta", "tta", nil, false},
 	{"wv", "wavpack", nil, false},
 	{"ac3", "ac3", nil, true},
@@ -63,10 +64,10 @@ var audioOuts = []audioOut{
 
 // 视频输出预设表
 type videoOut struct {
-	fmt       string
-	vcodec    string
-	acodec    string
-	extra     []string
+	fmt    string
+	vcodec string
+	acodec string
+	extra  []string
 }
 
 var videoOuts = []videoOut{
@@ -89,8 +90,9 @@ var videoOuts = []videoOut{
 	{"gif", "", "", []string{"-vf", "fps=10,scale=480:-1:flags=lanczos"}},
 }
 
-// 仅输入格式（不支持作为输出）
-var inputOnly = []string{"mid", "midi", "ra", "rm", "rmvb", "asf"}
+// 仅输入格式（不支持作为输出）。
+// 注意：mpc(Musepack) ffmpeg 只有解码器、没有编码器，故只能作为源、不能作为目标。
+var inputOnly = []string{"mid", "midi", "ra", "rm", "rmvb", "asf", "mpc"}
 
 // 构建预设表
 func buildPresets() []Preset {
@@ -139,34 +141,46 @@ func buildPresets() []Preset {
 
 var presets = buildPresets()
 
-// Find 找匹配预设
-func Find(inExt, outFmt, quality string) (*Preset, bool) {
+// Find 找匹配预设（仅按输入/输出格式，不含音质；音质在调用处校验）
+func Find(inExt, outFmt string) (*Preset, bool) {
 	for i := range presets {
 		p := &presets[i]
 		if p.OutFmt != outFmt || p.InputOnly {
 			continue
 		}
-		ok := false
 		for _, e := range p.InExts {
 			if e == inExt {
-				ok = true
-				break
+				return p, true
 			}
 		}
-		if !ok {
-			continue
-		}
-		if len(p.QualityArgs) > 0 {
-			if _, hit := p.QualityArgs[quality]; !hit {
-				for k := range p.QualityArgs {
-					quality = k
-					break
-				}
-			}
-		}
-		return p, true
 	}
 	return nil, false
+}
+
+// ValidQualities 返回该预设支持的音质档（排序后），用于错误提示
+func (p *Preset) ValidQualities() []string {
+	q := make([]string, 0, len(p.QualityArgs))
+	for k := range p.QualityArgs {
+		q = append(q, k)
+	}
+	sort.Strings(q)
+	return q
+}
+
+// SupportsInput 判断该后缀是否可作为转码输入（被任一输出预设接受）
+func SupportsInput(ext string) bool {
+	for i := range presets {
+		p := &presets[i]
+		if p.InputOnly {
+			continue
+		}
+		for _, e := range p.InExts {
+			if e == ext {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // BuildArgs 翻译为 ffmpeg 参数

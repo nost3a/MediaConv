@@ -4,6 +4,20 @@
 
 ---
 
+## ⚠️ 发布前必做：吊销泄露的访问令牌（PAT）
+
+之前沟通里贴出来的 GitHub **个人访问令牌（PAT）已经明文出现在聊天里**，视为已泄露。
+任何拿到它的人都能以你的身份读写你的仓库。发布前请务必先在 GitHub 后台吊销：
+
+1. 打开 https://github.com/settings/tokens
+2. 找到当时用的那个 token（`ghp_...`），点 **Revoke（吊销）**（或 **Delete**）
+3. 以后需要推送，重新生成一个**仅限本仓库、最小权限**的 token，用完即删
+
+> 本次重构的源码推送已通过 `ghproxy.net` 镜像完成，不再需要旧令牌。
+> 也建议顺手检查一下仓库的 Settings → Deploy keys / Actions secrets 有无遗留凭证。
+
+---
+
 ## 第 0 步：为什么不能一个 zip 全传？
 
 GitHub 硬规定：**单个文件超过 100MB，git push 直接被拒**。
@@ -82,21 +96,22 @@ git push -u origin main
 
 **必传（README 里的下载按钮指向它们）：**
 
-| 文件 | 大概大小 |
-|---|---|
-| `MediaConv-Win64.exe` | 171 MB |
-| `MediaConv-Linux-amd64-cli` | 8.6 MB |
-| `MediaConv-Linux-amd64.deb` | 16 MB |
-| `MediaConv-Android.apk` | 107 MB |
+| 文件（来自 `bin/`） | 构建脚本 | 大概大小 |
+|---|---|---|
+| `mediaconv-windows-amd64.exe` | `scripts/build-windows-cli.sh` | ~170 MB（内嵌 ffmpeg） |
+| `mediaconv-linux-amd64` | `scripts/build-cli.sh` | ~10 MB |
+| `mediaconv-linux-amd64-gui` | `scripts/build-linux-webview.sh` | ~30 MB |
+| `MediaConv-Android.apk` | Android Studio 打包 | ~100 MB |
 
-**建议也传（其他平台）：**
+> 注：README 里的 `releases/latest/download/...` 直链文件名要和这里上传的**完全一致**。
+> 若改用新文件名，记得同步改 README 顶部"一键下载"里的链接。
 
-| 文件 | 大概大小 |
-|---|---|
-| `MediaConv-Win32.exe` | 171 MB |
-| `MediaConv-v1.0.0-linux-amd64.tar.gz` | 27 MB |
-| `mconv-windows-amd64.exe` | 171 MB |
-| `MediaConv-Termux-arm64` | 8.3 MB |
+**建议也传（其他平台 / GUI）：**
+
+| 文件（来自 `bin/`） | 构建脚本 | 大概大小 |
+|---|---|---|
+| `mediaconv-windows-amd64-gui.exe` | `scripts/build-windows.sh` | ~170 MB |
+| `mediaconv-linux-amd64-gui` | `scripts/build-linux-webview.sh` | ~30 MB |
 
 4. 等上传进度条走完（107MB 的 APK 和 171MB 的 exe 要传几分钟，别急）
 

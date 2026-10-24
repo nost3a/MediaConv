@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"path/filepath"
 	"strings"
 
@@ -15,9 +14,8 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+	"github.com/nost3a/MediaConv/internal/convert"
 	"github.com/nost3a/MediaConv/internal/ffwrap"
-	"github.com/nost3a/MediaConv/internal/musicdecrypt"
-	"github.com/nost3a/MediaConv/internal/preset"
 	"image/color"
 )
 
@@ -32,8 +30,8 @@ func (t *blueTheme) Color(c fyne.ThemeColorName, v fyne.ThemeVariant) color.Colo
 	}
 	return theme.DefaultTheme().Color(c, v)
 }
-func (t *blueTheme) Font(s fyne.TextStyle) fyne.Resource   { return theme.DefaultTheme().Font(s) }
-func (t *blueTheme) Size(n fyne.ThemeSizeName) float32     { return theme.DefaultTheme().Size(n) }
+func (t *blueTheme) Font(s fyne.TextStyle) fyne.Resource     { return theme.DefaultTheme().Font(s) }
+func (t *blueTheme) Size(n fyne.ThemeSizeName) float32       { return theme.DefaultTheme().Size(n) }
 func (t *blueTheme) Icon(n fyne.ThemeIconName) fyne.Resource { return theme.DefaultTheme().Icon(n) }
 
 func startGUI() {
@@ -102,26 +100,6 @@ func startGUI() {
 }
 
 func doConvertGUI(inPath, outFmt, quality string, bar *widget.ProgressBar, status *widget.Label) error {
-	if musicdecrypt.IsPrivateExt(inPath) {
-		dec, _, err := musicdecrypt.Decrypt(inPath)
-		if err != nil {
-			return err
-		}
-		inPath = dec
-	}
-	inExt := strings.TrimPrefix(filepath.Ext(inPath), ".")
-	p, ok := preset.Find(inExt, outFmt, quality)
-	if !ok {
-		return fmt.Errorf("不支持: %s -> %s", inExt, outFmt)
-	}
-	dir := filepath.Dir(inPath)
-	base := strings.TrimSuffix(filepath.Base(inPath), filepath.Ext(inPath))
-	outPath := filepath.Join(dir, base+"."+outFmt)
-	lastOutPath = outPath
-
-	args := p.BuildArgs(quality, outPath)
-	args = append([]string{"-i", inPath}, args...)
-
 	ffBin, err := ffwrap.FindFFmpeg()
 	if err != nil {
 		return err
@@ -130,17 +108,30 @@ func doConvertGUI(inPath, outFmt, quality string, bar *widget.ProgressBar, statu
 	if err != nil {
 		return err
 	}
-	dur := ffwrap.ProbeDuration(probeBin, inPath)
-	log.Printf("ffmpeg %v", args)
 
-	return ffwrap.Run(context.Background(), ffBin, args, func(sec float64) {
-		if dur > 0 {
-			pct := sec / dur
-			if pct > 1 {
-				pct = 1
+	dir := filepath.Dir(inPath)
+	base := strings.TrimSuffix(filepath.Base(inPath), filepath.Ext(inPath))
+	outPath := filepath.Join(dir, base+"."+outFmt)
+	lastOutPath = outPath
+
+	opts := convert.Options{
+		InPath:     inPath,
+		OutFmt:     outFmt,
+		OutPath:    outPath,
+		Quality:    quality,
+		FFmpegBin:  ffBin,
+		FFprobeBin: probeBin,
+		OnProgress: func(sec, total float64) {
+			if total > 0 {
+				pct := sec / total
+				if pct > 1 {
+					pct = 1
+				}
+				bar.SetValue(pct)
+				status.SetText(fmt.Sprintf("转码中 %.0f%%", pct*100))
 			}
-			bar.SetValue(pct)
-			status.SetText(fmt.Sprintf("转码中 %.0f%%", pct*100))
-		}
-	})
+		},
+	}
+	_, err = convert.Convert(context.Background(), opts)
+	return err
 }
