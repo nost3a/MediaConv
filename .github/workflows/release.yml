@@ -1,0 +1,81 @@
+name: Release
+
+# 在打 v* tag 或手动触发时，于 GitHub runner 上构建全平台安装包并发布到 Releases。
+# runner 网速快，可秒下 Windows 内嵌所需的 162M ffmpeg.exe（沙箱环境下载过慢，故不在本地构建 Windows）。
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # git describe 需要 tag 历史
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.0'
+
+      - name: Install Linux GUI build deps (X11/GL/Wayland)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config gcc \
+            libgl1-mesa-dev libglu1-mesa-dev libx11-dev libxext-dev libxrandr-dev \
+            libxinerama-dev libxcursor-dev libxi-dev libxxf86vm-dev \
+            libwayland-dev libxkbcommon-dev zip
+
+      - name: Install mingw-w64 (Windows GUI cross-compile)
+        run: sudo apt-get install -y gcc-mingw-w64-x86-64
+
+      - name: Fetch ffmpeg.exe (Windows embed; fast on GitHub runner)
+        run: bash scripts/fetch-ffmpeg.sh
+
+      - name: Build all packages
+        run: |
+          bash scripts/build-cli.sh
+          bash scripts/build-linux-webview.sh
+          bash scripts/build-windows-cli.sh
+          bash scripts/build-windows.sh
+
+      - name: Package release artifacts
+        run: |
+          mkdir -p dist
+          tar -C bin -czf dist/mediaconv-linux-amd64-cli.tar.gz mediaconv-linux-amd64
+          tar -C bin -czf dist/mediaconv-linux-amd64-gui.tar.gz mediaconv-linux-amd64-gui
+          ( cd bin && zip -q ../dist/mediaconv-windows-amd64-cli.zip mediaconv-windows-amd64.exe )
+          ( cd bin && zip -q ../dist/mediaconv-windows-amd64-gui.zip mediaconv-windows-amd64-gui.exe )
+
+          # 最小 .deb 包装 Linux GUI（动态链接 libGL/libX11，需在 Depends 声明）
+          VER="${GITHUB_REF_NAME#v}"
+          [ -z "$VER" ] && VER=dev
+          mkdir -p /tmp/deb/DEBIAN /tmp/deb/usr/bin
+          cp bin/mediaconv-linux-amd64-gui /tmp/deb/usr/bin/mediaconv
+          cat > /tmp/deb/DEBIAN/control <<EOF
+          Package: mediaconv
+          Version: $VER
+          Section: video
+          Priority: optional
+          Architecture: amd64
+          Depends: libc6, libgl1, libglu1-mesa, libx11-6, libxext6, libxrandr2, libxinerama1, libxcursor1, libxi6, libxxf86vm1, libwayland-client0, libxkbcommon0
+          Maintainer: nost3a <dev@mediaconv.local>
+          Description: MediaConv local media transcoder (GUI) - converts and decrypts audio/video locally.
+          EOF
+          sed -i 's/^[[:space:]]*//' /tmp/deb/DEBIAN/control
+          dpkg-deb --build /tmp/deb "dist/mediaconv-linux-amd64-gui.deb"
+          echo "=== dist ==="; ls -la dist
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: MediaConv ${{ github.ref_name }}
+          files: dist/*
+          generate_release_notes: true
